@@ -161,24 +161,24 @@ bool_true() {
   case "$1" in 1|true|TRUE|yes|YES|on|ON) return 0 ;; *) return 1 ;; esac
 }
 
-start_update_loop() {
+start_upgrade_loop() {
   bool_true "$AUTO_UPDATE" || return 0
-  UPDATER="$MODDIR/updater.sh"
-  [ -x "$UPDATER" ] || { log_msg warn "updater.sh is missing or not executable"; return 1; }
+  UPGRADER="$MODDIR/upgrader.sh"
+  [ -x "$UPGRADER" ] || { log_msg warn "upgrader.sh is missing or not executable"; return 1; }
 
   MODULE_ID="$(sed -n 's/^id=//p' "$MODDIR/module.prop" 2>/dev/null | head -n 1 | tr -d '\r')"
-  UPDATER_STATE_DIR="${MODULE_STATE_DIR:-/data/adb/$MODULE_ID}"
-  UPDATER_PID_FILE="$UPDATER_STATE_DIR/updater.pid"
+  UPGRADER_STATE_DIR="${MODULE_STATE_DIR:-/data/adb/$MODULE_ID}"
+  UPGRADER_PID_FILE="$UPGRADER_STATE_DIR/upgrader.pid"
 
-  if [ -r "$UPDATER_PID_FILE" ]; then
-    UPDATE_PID="$(cat "$UPDATER_PID_FILE" 2>/dev/null)"
+  if [ -r "$UPGRADER_PID_FILE" ]; then
+    UPDATE_PID="$(cat "$UPGRADER_PID_FILE" 2>/dev/null)"
     case "$UPDATE_PID" in ''|*[!0-9]*) UPDATE_PID="" ;; esac
-    [ -n "$UPDATE_PID" ] && kill -0 "$UPDATE_PID" 2>/dev/null && { log_msg info "Automatic update loop already running (PID $UPDATE_PID)."; return 0; }
-    rm -f "$UPDATER_PID_FILE"
+    [ -n "$UPDATE_PID" ] && kill -0 "$UPDATE_PID" 2>/dev/null && { log_msg info "Automatic upgrade loop already running (PID $UPDATE_PID)."; return 0; }
+    rm -f "$UPGRADER_PID_FILE"
   fi
 
-  MODDIR="$MODDIR" nohup "$UPDATER" loop >/dev/null 2>&1 &
-  log_msg info "Automatic update loop started."
+  MODDIR="$MODDIR" nohup "$UPGRADER" loop >/dev/null 2>&1 &
+  log_msg info "Automatic upgrade loop started."
 }
 
 now_seconds() {
@@ -549,8 +549,8 @@ command_requirements_ok || {
 acquire_lock || exit 0
 wait_for_android_boot
 
-# Start the independent universal updater only when explicitly enabled.
-start_update_loop
+# Start the independent universal upgrader only when explicitly enabled.
+start_upgrade_loop
 
 enable_adb_tcp
 log_msg info "Breakout Box service started"

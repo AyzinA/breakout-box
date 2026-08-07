@@ -400,6 +400,9 @@ UPDATE_JSON_URL="https://raw.githubusercontent.com/AyzinA/breakout-box/master/up
 UPDATE_REQUIRE_SHA256=true
 UPDATE_INSTALL_ONLY_ON_WIFI=false
 UPDATE_KEEP_DOWNLOADED_ZIP=false
+
+UPGRADER_MAX_LOG_SIZE=1048576
+UPGRADER_MAX_LOG_FILES=3
 ```
 
 After installation, edit:
@@ -527,15 +530,15 @@ Rule repair failed (1/3)
 
 ---
 
-# Automatic Updater
+# Automatic Upgrader
 
 Breakout Box includes:
 
 ```text
-updater.sh
+upgrader.sh
 ```
 
-The updater can check a remote `update.json` file and verify a newer module package before installation.
+The upgrader can check a remote `update.json` file and verify a newer module package before installation.
 
 Automatic updates are disabled by default:
 
@@ -571,38 +574,71 @@ UPDATE_KEEP_DOWNLOADED_ZIP=false
 
 # update.json
 
-Example update metadata:
+The upgrader supports a shared `update.json` containing multiple Magisk modules.
+
+Each module is stored under its exact `module.prop` ID. Breakout Box reads:
+
+```properties
+id=breakout-box
+```
+
+and selects only:
+
+```text
+modules.breakout-box
+```
+
+All other module entries are ignored.
+
+Example multi-module manifest:
+
+```json
+{
+  "schemaVersion": 2,
+  "modules": {
+    "breakout-box": {
+      "version": "1.0.2",
+      "versionCode": 102,
+      "zipUrl": "https://github.com/AyzinA/breakout-box/raw/master/releases/download/v1.0.2/breakout-box-v1.0.2.zip",
+      "sha256": "SHA256_OF_BREAKOUT_BOX_ZIP",
+      "changelog": "https://raw.githubusercontent.com/AyzinA/breakout-box/master/CHANGELOG.md"
+    },
+    "android-exporter": {
+      "version": "1.0.1",
+      "versionCode": 101,
+      "zipUrl": "https://github.com/AyzinA/android-exporter/releases/download/v1.0.1/android-exporter-v1.0.1.zip",
+      "sha256": "SHA256_OF_ANDROID_EXPORTER_ZIP",
+      "changelog": "https://raw.githubusercontent.com/AyzinA/android-exporter/master/CHANGELOG.md"
+    },
+    "auto-unlock": {
+      "version": "1.0.1",
+      "versionCode": 101,
+      "zipUrl": "https://github.com/AyzinA/auto-unlock/releases/download/v1.0.1/auto-unlock-v1.0.1.zip",
+      "sha256": "SHA256_OF_AUTO_UNLOCK_ZIP",
+      "changelog": "https://raw.githubusercontent.com/AyzinA/auto-unlock/master/CHANGELOG.md"
+    }
+  }
+}
+```
+
+The same `upgrader.sh` can therefore be shared by all modules. Each installed module determines its own ID from `module.prop` and only considers the matching manifest object.
+
+The downloaded ZIP is still validated separately. Its root `module.prop` must contain the same module ID and the expected `versionCode`, so a manifest mistake cannot silently install another module.
+
+For compatibility, `upgrader.sh` also accepts the previous single-module format:
 
 ```json
 {
   "moduleId": "breakout-box",
   "version": "1.0.2",
   "versionCode": 102,
-  "zipUrl": "https://github.com/AyzinA/breakout-box/releases/download/v1.0.2/breakout-box-v1.0.2.zip",
+  "zipUrl": "https://example.com/breakout-box-v1.0.2.zip",
   "sha256": "SHA256_OF_THE_RELEASE_ZIP",
-  "changelog": "https://raw.githubusercontent.com/AyzinA/breakout-box/master/CHANGELOG.md"
+  "changelog": "https://example.com/CHANGELOG.md"
 }
 ```
 
-The URLs must be normal raw URLs.
-
-Do not use Markdown-style URLs such as:
-
-```text
-[https://example.com/file](https://example.com/file)
-```
-
-and do not escape the protocol as:
-
-```text
-https\://example.com
-```
-
-Use:
-
-```text
-https://example.com
-```
+The URLs must be normal HTTPS URLs. Do not use Markdown links or escaped protocols such as `https\://`.
 
 ---
 
@@ -611,13 +647,13 @@ https://example.com
 Run:
 
 ```sh
-/data/adb/modules/breakout-box/updater.sh check
+/data/adb/modules/breakout-box/upgrader.sh check
 ```
 
-Check updater status:
+Check upgrader status:
 
 ```sh
-/data/adb/modules/breakout-box/updater.sh status
+/data/adb/modules/breakout-box/upgrader.sh status
 ```
 
 ---
@@ -630,9 +666,9 @@ When:
 AUTO_UPDATE=true
 ```
 
-Breakout Box starts the updater loop automatically.
+Breakout Box starts the upgrader loop automatically.
 
-The updater runs separately from the routing worker so update failures do not interrupt the breakout routing service.
+The upgrader runs separately from the routing worker so update failures do not interrupt the breakout routing service.
 
 The default polling interval is:
 
@@ -646,7 +682,7 @@ which equals one day.
 
 # Update Verification
 
-Before installation, the updater can verify:
+Before installation, the upgrader can verify:
 
 * HTTPS download source
 * Manifest metadata
@@ -661,6 +697,49 @@ The module ID inside the downloaded package must match:
 
 ```text
 breakout-box
+```
+
+---
+
+# Upgrader Logging and Log Rotation
+
+The upgrader writes its own log independently from the routing service:
+
+```text
+/data/adb/breakout-box/upgrader.log
+```
+
+Rotated files are:
+
+```text
+upgrader.log.1
+upgrader.log.2
+upgrader.log.3
+```
+
+Default limits:
+
+```sh
+UPGRADER_MAX_LOG_SIZE=1048576
+UPGRADER_MAX_LOG_FILES=3
+```
+
+View recent upgrader activity:
+
+```sh
+tail -n 50 /data/adb/breakout-box/upgrader.log
+```
+
+The Android logcat tag is:
+
+```text
+breakout-box-upgrader
+```
+
+To watch both the routing service and upgrader in one stream:
+
+```sh
+adb logcat -s breakout-box:I breakout-box-upgrader:I
 ```
 
 ---
@@ -698,7 +777,7 @@ breakout-box/
 ├── module.prop
 ├── customize.sh
 ├── service.sh
-├── updater.sh
+├── upgrader.sh
 ├── uninstall.sh
 ├── default-config.conf
 ├── README.md
@@ -716,7 +795,11 @@ Runtime state is stored separately:
 ├── breakout-box.log.2
 ├── breakout-box.log.3
 ├── service.lock/
-└── updater.pid
+├── upgrader.log
+├── upgrader.log.1
+├── upgrader.status
+├── upgrader.pid
+└── upgrade/
 ```
 
 Not every runtime file will necessarily exist at all times.
@@ -1112,6 +1195,160 @@ if your OpenVPN configuration uses different values.
 
 ---
 
+# Troubleshooting
+
+## Watch service and upgrader logs together
+
+From a computer connected through ADB:
+
+```sh
+adb logcat -s breakout-box:I breakout-box-upgrader:I
+```
+
+This shows routing/service events and upgrade checks in chronological order.
+
+## Check current Breakout Box status
+
+```sh
+cat /data/adb/breakout-box/status
+```
+
+A healthy example is:
+
+```text
+Rules applied: VPN=tun0 WAN=rmnet_data0 GW=10.133.186.121 TUN=10.8.0.254/24
+```
+
+## Check routing service log
+
+```sh
+tail -n 50 /data/adb/breakout-box/breakout-box.log
+```
+
+## Check upgrader log
+
+```sh
+tail -n 50 /data/adb/breakout-box/upgrader.log
+```
+
+## Check upgrader status
+
+```sh
+/data/adb/modules/breakout-box/upgrader.sh status
+```
+
+## Run an upgrade check manually
+
+```sh
+/data/adb/modules/breakout-box/upgrader.sh check
+```
+
+If the shared manifest does not contain `breakout-box`, the upgrader logs:
+
+```text
+No update manifest entry found for module=breakout-box
+```
+
+## Verify the manifest manually
+
+```sh
+curl -fsSL "https://raw.githubusercontent.com/AyzinA/breakout-box/master/update.json"
+```
+
+Confirm there is an object named exactly:
+
+```json
+"breakout-box": {
+```
+
+The name must match `id=breakout-box` in `module.prop`.
+
+## No routing / no BB_FORWARD / no BB_NAT
+
+Check:
+
+```sh
+cat /proc/sys/net/ipv4/ip_forward
+ip -4 addr show tun0
+ip route get 8.8.8.8
+ip rule
+ip route show table 100
+ip route show table 101
+iptables -L BB_FORWARD -n -v --line-numbers
+iptables -t nat -L BB_NAT -n -v --line-numbers
+```
+
+Expected IPv4 forwarding:
+
+```text
+1
+```
+
+If `tun0` is missing, Breakout Box waits for OpenVPN to recreate it.
+
+## `VPN unavailable; stale policy routes removed`
+
+Confirm the VPN interface and address exist:
+
+```sh
+ip -4 addr show tun0
+```
+
+Then confirm Android has a usable WAN route:
+
+```sh
+ip route get 8.8.8.8
+```
+
+## Health check keeps repairing rules
+
+Inspect the policy tables and chains:
+
+```sh
+ip route show table 100
+ip route show table 101
+iptables -L BB_FORWARD -n -v
+iptables -t nat -L BB_NAT -n -v
+```
+
+Android `netd`, another firewall application, or a VPN reconnect may remove rules. Breakout Box will attempt to restore them automatically.
+
+## Upgrader returns HTTP 404
+
+Check the active persistent configuration, because it overrides `default-config.conf`:
+
+```sh
+grep '^UPDATE_JSON_URL=' /data/adb/breakout-box/config.conf
+```
+
+Then test that exact URL with:
+
+```sh
+curl -fsSL "$(sed -n 's/^UPDATE_JSON_URL="\(.*\)"/\1/p' /data/adb/breakout-box/config.conf)"
+```
+
+## SHA-256 mismatch
+
+Recalculate the published module ZIP checksum:
+
+```sh
+sha256sum breakout-box-v1.0.2.zip
+```
+
+Then update the matching `breakout-box` entry in `update.json`.
+
+## Stale upgrader PID
+
+Check:
+
+```sh
+cat /data/adb/breakout-box/upgrader.pid
+```
+
+The `status` command reports whether the PID belongs to a running upgrader loop. A stale PID is removed automatically when the service starts a new loop.
+
+---
+
 # v1.0.2 Highlights
 
 Version 1.0.2 adds major reliability improvements over the initial release.
@@ -1128,7 +1365,7 @@ Version 1.0.2 adds major reliability improvements over the initial release.
 * Log levels
 * Log rotation
 * Status reporting
-* Universal updater
+* Universal upgrader
 * SHA-256 update verification
 * Optional Wi-Fi-only update checks
 

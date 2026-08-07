@@ -1,8 +1,26 @@
 {
-  "moduleId": "breakout-box",
-  "version": "1.0.2",
-  "versionCode": 102,
-  "zipUrl": "https://github.com/YOUR_GITHUB_USERNAME/breakout-box/releases/download/v1.0.2/breakout-box-v1.0.2.zip",
-  "sha256": "PUT_RELEASE_ZIP_SHA256_HERE",
-  "changelog": "https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/breakout-box/main/CHANGELOG.md"
+  "schemaVersion": 2,
+  "modules": {
+    "breakout-box": {
+      "version": "1.0.2",
+      "versionCode": 102,
+      "zipUrl": "https://github.com/YOUR_GITHUB_USERNAME/breakout-box/releases/download/v1.0.2/breakout-box-v1.0.2.zip",
+      "sha256": "PUT_BREAKOUT_BOX_ZIP_SHA256_HERE",
+      "changelog": "https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/breakout-box/main/CHANGELOG.md"
+    },
+    "android-exporter": {
+      "version": "1.0.1",
+      "versionCode": 101,
+      "zipUrl": "https://github.com/YOUR_GITHUB_USERNAME/android-exporter/releases/download/v1.0.1/android-exporter-v1.0.1.zip",
+      "sha256": "PUT_ANDROID_EXPORTER_ZIP_SHA256_HERE",
+      "changelog": "https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/android-exporter/main/CHANGELOG.md"
+    },
+    "auto-unlock": {
+      "version": "1.0.1",
+      "versionCode": 101,
+      "zipUrl": "https://github.com/YOUR_GITHUB_USERNAME/auto-unlock/releases/download/v1.0.1/auto-unlock-v1.0.1.zip",
+      "sha256": "PUT_AUTO_UNLOCK_ZIP_SHA256_HERE",
+      "changelog": "https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/auto-unlock/main/CHANGELOG.md"
+    }
+  }
 }

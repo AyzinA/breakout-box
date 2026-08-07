@@ -8,7 +8,9 @@
 - Service supervisor with automatic worker restart.
 - Dedicated `BB_FORWARD` and `BB_NAT` iptables chains.
 - Log files with automatic size-based rotation.
-- Universal secure `updater.sh`.
+- Universal secure `upgrader.sh`.
+- Multi-module `update.json` support with module-ID selection.
+- Independent upgrader log rotation and `breakout-box-upgrader` logcat tag.
 - SHA-256 and module/version validation for updates.
 - Optional Wi-Fi-only update checks.
 - Runtime status reporting.

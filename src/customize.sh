@@ -28,7 +28,7 @@ fi
 set_perm_recursive "$MODPATH" 0 0 0755 0644
 
 set_perm "$MODPATH/service.sh" 0 0 0755
-set_perm "$MODPATH/updater.sh" 0 0 0755
+set_perm "$MODPATH/upgrader.sh" 0 0 0755
 set_perm "$MODPATH/customize.sh" 0 0 0755
 
 [ -f "$MODPATH/uninstall.sh" ] &&
