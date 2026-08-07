@@ -4,8 +4,8 @@
     "breakout-box": {
       "version": "1.0.2",
       "versionCode": 102,
-      "zipUrl": "https://github.com/AyzinA/breakout-box/raw/master/releases/download/v1.0.2/breakout-box-v1.0.2.zip",
-      "sha256": "1A07AC0FB08A5E4F21275E0314CE121EFA47D6D9DA00B7FC7D876F9B0D9C679E",
+      "zipUrl": "https://github.com/AyzinA/breakout-box/releases/download/1.0.2/breakout-box-v1.0.2.zip",
+      "sha256": "1a07ac0fb08a5e4f21275e0314ce121efa47d6d9da00b7fc7d876f9b0d9c679e",
       "changelog": "https://raw.githubusercontent.com/AyzinA/breakout-box/master/CHANGELOG.md"
     }
   }
