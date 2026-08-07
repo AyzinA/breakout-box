@@ -26,18 +26,11 @@ MODDIR="${0%/*}"
 # Shared Breakout Box configuration.
 STATE_DIR="/data/adb/breakout-box"
 DEFAULT_CONFIG="$MODDIR/default-config.conf"
-CONFIG="$STATE_DIR/config.conf"
-
-mkdir -p "$STATE_DIR" 2>/dev/null
-
-# Create the persistent configuration only once. Future module upgrades keep it.
-if [ ! -f "$CONFIG" ] && [ -f "$DEFAULT_CONFIG" ]; then
-  cp "$DEFAULT_CONFIG" "$CONFIG" 2>/dev/null
-  chmod 0600 "$CONFIG" 2>/dev/null
-fi
+CONFIG_FILE="$STATE_DIR/config.conf"
 
 # Load persistent device settings when available.
-[ -f "$CONFIG" ] && . "$CONFIG"
+[ -r "$DEFAULT_CONFIG" ] && . "$DEFAULT_CONFIG"
+[ -r "$CONFIG_FILE" ] && . "$CONFIG_FILE"
 
 # OpenVPN interface and subnet.
 VPN="${VPN_INTERFACE:-tun0}"
