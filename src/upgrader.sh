@@ -29,7 +29,6 @@ UPDATE_KEEP_DOWNLOADED_ZIP=false
 MODULE_STATE_DIR=""
 UPGRADER_MAX_LOG_SIZE=1048576
 UPGRADER_MAX_LOG_FILES=3
-AWK_BIN="awk"
 
 # Load packaged defaults first so a module can override its state directory.
 [ -r "$DEFAULT_CONFIG" ] && . "$DEFAULT_CONFIG"
@@ -104,6 +103,16 @@ find_busybox() {
 }
 BB="$(find_busybox)"
 
+run_awk() {
+    # Android/Toybox awk has crashed on some vendor ROMs. Magisk ships its own
+    # BusyBox, so prefer that implementation whenever it is available.
+    if [ -n "$BB" ]; then
+        "$BB" awk "$@"
+    else
+        awk "$@"
+    fi
+}
+
 cleanup_lock() { rmdir "$LOCK_DIR" 2>/dev/null; }
 secure_url() { case "$1" in https://*) return 0 ;; *) return 1 ;; esac; }
 
@@ -144,7 +153,7 @@ extract_module_manifest() {
     INPUT="$1"; OUTPUT="$2"; TARGET="$3"
     rm -f "$OUTPUT"
 
-    "$AWK_BIN" -v target="$TARGET" '
+    run_awk -v target="$TARGET" '
         BEGIN {
             capture = 0
             depth = 0
@@ -203,15 +212,21 @@ select_manifest_for_module() {
 
 sha256_file() {
     FILE="$1"
+    HASH_LINE=""
     if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$FILE" | awk '{print $1}'
+        HASH_LINE="$(sha256sum "$FILE" 2>/dev/null)" || return 1
     elif command -v toybox >/dev/null 2>&1; then
-        toybox sha256sum "$FILE" | awk '{print $1}'
+        HASH_LINE="$(toybox sha256sum "$FILE" 2>/dev/null)" || return 1
     elif [ -n "$BB" ]; then
-        "$BB" sha256sum "$FILE" | awk '{print $1}'
+        HASH_LINE="$("$BB" sha256sum "$FILE" 2>/dev/null)" || return 1
     else
         return 1
     fi
+
+    # sha256sum format is: <64-hex-hash><spaces><filename>. Avoid awk here so
+    # update verification does not depend on the vendor awk binary either.
+    HASH_LINE="${HASH_LINE%% *}"
+    printf '%s\n' "$HASH_LINE"
 }
 
 wifi_connected() {
