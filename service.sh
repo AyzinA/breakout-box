@@ -85,7 +85,7 @@ IPTABLES_BIN="iptables"
 AWK_BIN="awk"
 GREP_BIN="grep"
 LOG_BIN=""
-command -v log >/dev/null 2>&1 && LOG_BIN="log"
+[ -x /system/bin/log ] && LOG_BIN="/system/bin/log"
 
 # Last successfully applied network state.
 LAST_WAN=""
