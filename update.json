@@ -1,0 +1,8 @@
+{
+  "moduleId": "breakout-box",
+  "version": "1.0.2",
+  "versionCode": 102,
+  "zipUrl": "https://github.com/ayzina/breakout-box/releases/download/v1.0.2/breakout-box-v1.0.2.zip",
+  "sha256": "PUT_RELEASE_ZIP_SHA256_HERE",
+  "changelog": "https://raw.githubusercontent.com/ayzina/breakout-box/main/CHANGELOG.md"
+}

@@ -1,0 +1,6 @@
+id=breakout-box
+name=Breakout Box
+version=1.0.1
+versionCode=101
+author=NONAME
+description=Self-healing OpenVPN breakout routing/NAT with GitHub updater
