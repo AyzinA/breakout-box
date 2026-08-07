@@ -408,9 +408,20 @@ apply_rules() {
   [ -n "$WAN" ] || return 1
   [ -d "/sys/class/net/$VPN" ] || return 1
 
-  enable_forwarding || return 1
-  apply_policy_rules "$WAN" "$GW" || return 1
-  apply_iptables_rules "$WAN" || return 1
+  if ! enable_forwarding; then
+    log_msg "Failed to enable IPv4 forwarding"
+    return 1
+  fi
+
+  if ! apply_policy_rules "$WAN" "$GW"; then
+    log_msg "Failed to apply policy routing: VPN=$VPN WAN=$WAN GW=${GW:-direct}"
+    return 1
+  fi
+
+  if ! apply_iptables_rules "$WAN"; then
+    log_msg "Failed to apply iptables/NAT rules: VPN=$VPN WAN=$WAN FILTER_CHAIN=$FILTER_CHAIN NAT_CHAIN=$NAT_CHAIN"
+    return 1
+  fi
 
   log_msg "Rules applied: VPN=$VPN WAN=$WAN GW=${GW:-direct} TUN=$CURRENT_TUN_ADDR"
   return 0
@@ -521,12 +532,10 @@ supervisor_loop() {
 
 trap release_lock EXIT INT TERM
 
-command_requirements_ok || {
-  mkdir -p "$STATE_DIR" 2>/dev/null
-  log_msg "Missing required command: ip, iptables, awk, or grep"
-  exit 1
-}
-
+# Do not use `command -v` as a fatal Android/Magisk startup gate.
+# Toybox/applet resolution can differ between an interactive adb shell and
+# Magisk's boot-service environment. The service invokes the commands directly
+# and the worker will report a real routing/firewall failure if one occurs.
 acquire_lock || exit 0
 wait_for_android_boot
 
