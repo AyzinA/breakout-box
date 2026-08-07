@@ -2,7 +2,7 @@
   "moduleId": "breakout-box",
   "version": "1.0.2",
   "versionCode": 102,
-  "zipUrl": "https://github.com/ayzina/breakout-box/releases/download/v1.0.2/breakout-box-v1.0.2.zip",
+  "zipUrl": "https://github.com/AyzinA/breakout-box/raw/master/releases/download/v1.0.2/breakout-box-v1.0.2.zip",
   "sha256": "A1F44E4711EDD5D6CD4434774A925EC65F4F447AA4321450776FD7B23647424C",
   "changelog": "https://raw.githubusercontent.com/ayzina/breakout-box/main/CHANGELOG.md"
 }
