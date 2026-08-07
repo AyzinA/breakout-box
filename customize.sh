@@ -1,7 +1,7 @@
 #!/system/bin/sh
 
 ui_print "***************************************"
-ui_print " Breakout Box v1.0.3 + Universal Updater"
+ui_print "******       Breakout Box        ******"
 ui_print "***************************************"
 ui_print "Installing self-healing routing service"
 ui_print "Installing updater.sh and default-config.conf"
