@@ -77,8 +77,7 @@ IP_BIN="ip"
 IPTABLES_BIN="iptables"
 AWK_BIN="awk"
 GREP_BIN="grep"
-LOG_BIN=""
-[ -x /system/bin/log ] && LOG_BIN="/system/bin/log"
+LOG_BIN="log"
 
 # Last successfully applied network state.
 LAST_WAN=""
@@ -100,38 +99,62 @@ CURRENT_TUN_ADDR=""
 
 rotate_logs() {
   [ -f "$LOG_FILE" ] || return 0
+
   SIZE="$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)"
   case "$SIZE" in ''|*[!0-9]*) SIZE=0 ;; esac
   case "$MAX_LOG_SIZE" in ''|*[!0-9]*) MAX_LOG_SIZE=1048576 ;; esac
   case "$MAX_LOG_FILES" in ''|*[!0-9]*) MAX_LOG_FILES=3 ;; esac
+
   [ "$SIZE" -gt "$MAX_LOG_SIZE" ] || return 0
 
-  [ -f "${LOG_FILE}.${MAX_LOG_FILES}" ] && rm -f "${LOG_FILE}.${MAX_LOG_FILES}"
+  [ -f "${LOG_FILE}.${MAX_LOG_FILES}" ] &&
+    rm -f "${LOG_FILE}.${MAX_LOG_FILES}"
+
   I=$((MAX_LOG_FILES - 1))
+
   while [ "$I" -ge 1 ]; do
-    [ -f "${LOG_FILE}.${I}" ] && mv -f "${LOG_FILE}.${I}" "${LOG_FILE}.$((I + 1))"
+    [ -f "${LOG_FILE}.${I}" ] &&
+      mv -f "${LOG_FILE}.${I}" "${LOG_FILE}.$((I + 1))"
+
     I=$((I - 1))
   done
+
   mv -f "$LOG_FILE" "${LOG_FILE}.1" 2>/dev/null
   : > "$LOG_FILE"
   chmod 600 "$LOG_FILE" 2>/dev/null
 }
 
-log() {
-  LEVEL="$1"; shift
-  [ "$LOG_LEVEL" = "off" ] && return 0
-  rotate_logs
-  MESSAGE="$*"
-  printf '[%s] [%s] %s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$LEVEL" "$$" "$MESSAGE" >> "$LOG_FILE" 2>/dev/null
-  [ -n "$LOG_BIN" ] && "$LOG_BIN" -t "$LOG_TAG" "[$LEVEL] $MESSAGE" 2>/dev/null
-}
 
 log_msg() {
+  LEVEL="$1"
+  shift
+
+  [ "$LOG_LEVEL" = "off" ] && return 0
+
   MESSAGE="$*"
-  if [ -n "$LOG_BIN" ]; then
-    "$LOG_BIN" -t "$LOG_TAG" "$MESSAGE"
-  fi
-  echo "$MESSAGE" > "$STATUS_FILE" 2>/dev/null
+
+  rotate_logs
+
+  # File log
+  printf '[%s] [%s] %s %s\n' \
+    "$(date '+%Y-%m-%d %H:%M:%S')" \
+    "$LEVEL" \
+    "$$" \
+    "$MESSAGE" \
+    >> "$LOG_FILE" 2>/dev/null
+
+  # Android logcat
+  [ -n "$LOG_BIN" ] &&
+    "$LOG_BIN" -t "$LOG_TAG" "[$LEVEL] $MESSAGE" 2>/dev/null
+
+  # Keep last important status
+  case "$LEVEL" in
+    status|warn|error)
+      echo "$MESSAGE" > "$STATUS_FILE" 2>/dev/null
+      ;;
+  esac
+
+  return 0
 }
 
 bool_true() {
@@ -141,7 +164,7 @@ bool_true() {
 start_update_loop() {
   bool_true "$AUTO_UPDATE" || return 0
   UPDATER="$MODDIR/updater.sh"
-  [ -x "$UPDATER" ] || { log warn "updater.sh is missing or not executable"; return 1; }
+  [ -x "$UPDATER" ] || { log_msg warn "updater.sh is missing or not executable"; return 1; }
 
   MODULE_ID="$(sed -n 's/^id=//p' "$MODDIR/module.prop" 2>/dev/null | head -n 1 | tr -d '\r')"
   UPDATER_STATE_DIR="${MODULE_STATE_DIR:-/data/adb/$MODULE_ID}"
@@ -150,12 +173,12 @@ start_update_loop() {
   if [ -r "$UPDATER_PID_FILE" ]; then
     UPDATE_PID="$(cat "$UPDATER_PID_FILE" 2>/dev/null)"
     case "$UPDATE_PID" in ''|*[!0-9]*) UPDATE_PID="" ;; esac
-    [ -n "$UPDATE_PID" ] && kill -0 "$UPDATE_PID" 2>/dev/null && { log info "Automatic update loop already running (PID $UPDATE_PID)."; return 0; }
+    [ -n "$UPDATE_PID" ] && kill -0 "$UPDATE_PID" 2>/dev/null && { log_msg info "Automatic update loop already running (PID $UPDATE_PID)."; return 0; }
     rm -f "$UPDATER_PID_FILE"
   fi
 
   MODDIR="$MODDIR" nohup "$UPDATER" loop >/dev/null 2>&1 &
-  log info "Automatic update loop started."
+  log_msg info "Automatic update loop started."
 }
 
 now_seconds() {
@@ -167,6 +190,7 @@ command_requirements_ok() {
   command -v "$IPTABLES_BIN" >/dev/null 2>&1 || return 1
   command -v "$AWK_BIN" >/dev/null 2>&1 || return 1
   command -v "$GREP_BIN" >/dev/null 2>&1 || return 1
+  command -v "$LOG_BIN" >/dev/null 2>&1 || return 1
   return 0
 }
 
@@ -189,7 +213,7 @@ acquire_lock() {
 
   OLD_PID="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
   if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-    log_msg "Another service.sh instance is already running with PID $OLD_PID"
+    log_msg warn "Another service.sh instance is already running with PID $OLD_PID"
     return 1
   fi
 
@@ -302,7 +326,7 @@ enable_adb_tcp() {
       sleep 1
       start adbd 2>/dev/null
     }
-    log_msg "ADB TCP enabled on port $ADB_PORT"
+    log_msg info  "ADB TCP enabled on port $ADB_PORT"
   fi
 }
 
@@ -407,7 +431,7 @@ apply_rules() {
   apply_policy_rules "$WAN" "$GW" || return 1
   apply_iptables_rules "$WAN" || return 1
 
-  log_msg "Rules applied: VPN=$VPN WAN=$WAN GW=${GW:-direct} TUN=$CURRENT_TUN_ADDR"
+  log_msg status "Rules applied: VPN=$VPN WAN=$WAN GW=${GW:-direct} TUN=$CURRENT_TUN_ADDR"
   return 0
 }
 
@@ -461,7 +485,7 @@ repair_or_restart() {
   fi
 
   REPAIR_FAILURES=$((REPAIR_FAILURES + 1))
-  log_msg "Rule repair failed ($REPAIR_FAILURES/$MAX_REPAIR_FAILURES)"
+  log_msg error "Rule repair failed ($REPAIR_FAILURES/$MAX_REPAIR_FAILURES)"
 
   [ "$REPAIR_FAILURES" -lt "$MAX_REPAIR_FAILURES" ] && return 0
   return 1
@@ -482,7 +506,7 @@ service_worker() {
       if [ -n "$LAST_TUN_INDEX" ] || [ -n "$LAST_WAN" ]; then
         clean_policy_rules
         reset_network_state
-        log_msg "VPN unavailable; stale policy routes removed"
+        log_msg warn "VPN unavailable; stale policy routes removed"
       fi
       sleep "$CHECK_INTERVAL"
       continue
@@ -491,7 +515,7 @@ service_worker() {
     if network_state_changed; then
       repair_or_restart || return 1
     elif health_check_due && ! health_check; then
-      log_msg "Health check failed; repairing routing and firewall state"
+      log_msg warn "Health check failed; repairing routing and firewall state"
       repair_or_restart || return 1
     fi
 
@@ -503,7 +527,7 @@ supervisor_loop() {
   while true; do
     service_worker
     EXIT_CODE="$?"
-    log_msg "Worker exited with code $EXIT_CODE; restarting in ${RESTART_DELAY}s"
+    log_msg warn "Worker exited with code $EXIT_CODE; restarting in ${RESTART_DELAY}s"
     clean_policy_rules
     reset_network_state
     sleep "$RESTART_DELAY"
@@ -518,7 +542,7 @@ trap release_lock EXIT INT TERM
 
 command_requirements_ok || {
   mkdir -p "$STATE_DIR" 2>/dev/null
-  log_msg "Missing required command: ip, iptables, awk, or grep"
+  log_msg error "Missing required command: ip, iptables, awk, grep, or log"
   exit 1
 }
 
@@ -529,5 +553,5 @@ wait_for_android_boot
 start_update_loop
 
 enable_adb_tcp
-log_msg "Breakout Box service started"
+log_msg info "Breakout Box service started"
 supervisor_loop
