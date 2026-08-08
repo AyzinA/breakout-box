@@ -1,29 +1,44 @@
 # Breakout Box
 
-**Version:** 1.0.2
-**Version Code:** 102
-**Platform:** Android / Magisk
+**Version:** 1.0.2  
+**Version Code:** 102  
+**Platform:** Android / Magisk  
 **Module ID:** `breakout-box`
 
-Breakout Box turns a rooted Android device into a small VPN breakout gateway.
+Breakout Box turns a rooted Android device into a small, self-healing VPN breakout gateway.
 
-Traffic arriving through an OpenVPN tunnel such as `tun0` can be forwarded through the Android device's currently active Internet connection, including:
+Traffic arriving through a configured VPN interface can be forwarded through the Android device's currently active Internet connection, including Wi-Fi and mobile data. The default configuration uses an OpenVPN-style `tun0` interface and `10.8.0.0/24`, but the routing code is interface-agnostic and can also be configured for interfaces such as WireGuard `wg0`.
 
-* Wi-Fi
-* Mobile data
-* Supported Android WAN interfaces
-
-The module automatically manages IPv4 forwarding, policy routing, NAT, firewall rules, WAN changes, VPN reconnects, ADB-over-TCP, health monitoring, persistent configuration, logging, and optional automatic updates.
+The module manages IPv4 forwarding, policy routing, NAT, firewall rules, WAN changes, VPN reconnects, ADB-over-TCP, health monitoring, persistent configuration, rotating logs, runtime status, and an optional secure HTTPS upgrader.
 
 ---
 
-# Features
+## Features
 
-## VPN breakout routing
+- VPN breakout routing through the Android device's active WAN.
+- Configurable VPN interface and client subnet.
+- Dynamic Wi-Fi/mobile-data WAN detection.
+- Policy routing using dedicated routing tables.
+- Automatic IPv4 forwarding and reverse-path-filter adjustment.
+- Dedicated `BB_FORWARD` and `BB_NAT` iptables chains.
+- Self-healing routing and firewall health checks.
+- Supervisor-based worker restart after repeated repair failures.
+- Automatic handling of VPN reconnects, interface recreation, and WAN changes.
+- Configurable ADB over TCP.
+- Persistent per-device configuration under `/data/adb/breakout-box/`.
+- Main service file logging with size-based rotation.
+- Independent upgrader logging with size-based rotation.
+- Secure HTTPS update manifests and ZIP downloads.
+- Multi-module `update.json` support with module-ID selection.
+- Backward-compatible support for legacy single-module manifests.
+- Optional SHA-256 verification before installation.
+- ZIP validation against expected module ID and `versionCode`.
+- Optional Wi-Fi-only upgrade checks.
+- Automatic upgrades disabled by default.
 
-Traffic arriving from the configured OpenVPN network is routed through the Android device's real Internet connection.
+---
 
-Default configuration:
+## Default Network Configuration
 
 ```text
 VPN interface: tun0
@@ -32,93 +47,85 @@ VPN table:     100
 WAN table:     101
 ```
 
-The module dynamically detects the currently active WAN interface.
-
-Examples include:
+Default routing priorities:
 
 ```text
-wlan0
-rmnet_data0
-rmnet_data1
-ccmni0
-wwan0
+9000  VPN/client return routing
+9001  VPN client traffic to WAN table
+9002  traffic arriving on the VPN interface to WAN table
 ```
 
-No WAN interface needs to be hardcoded.
+The default config is OpenVPN-oriented:
+
+```sh
+VPN_INTERFACE="tun0"
+VPN_NETWORK="10.8.0.0/24"
+```
+
+For WireGuard, only the interface/subnet configuration normally needs to change, for example:
+
+```sh
+VPN_INTERFACE="wg0"
+VPN_NETWORK="10.10.0.0/24"
+```
+
+Use the actual interface and peer/client subnet from your WireGuard configuration.
 
 ---
 
-## Automatic WAN detection
+## How Routing Works
 
-Breakout Box determines the active Internet path using the Android routing table.
-
-For example:
+Breakout Box detects the active Internet route with Android's routing table, conceptually using:
 
 ```sh
 ip route get 8.8.8.8
 ```
 
-may return:
+Examples:
 
 ```text
 8.8.8.8 via 10.0.1.1 dev wlan0 src 10.0.1.9
 ```
 
-or on mobile data:
+or:
 
 ```text
 8.8.8.8 via 10.132.5.142 dev rmnet_data0 src 10.132.5.141
 ```
 
-Breakout Box detects:
+The configured VPN interface is explicitly excluded from WAN selection. This allows the same routing logic to work with names such as `tun0`, `wg0`, or another configured VPN interface.
+
+Breakout Box tracks:
 
 ```text
-WAN interface
-Gateway
 VPN interface
-VPN address
+VPN interface index
+VPN IPv4 address
+WAN interface
+WAN gateway
 ```
 
-and automatically rebuilds its routing configuration whenever these values change.
+When one of those values changes, the routing and firewall state is rebuilt.
 
 ---
 
-# Routing Architecture
+## Policy Routing
 
-Breakout Box uses dedicated policy-routing tables.
+Breakout Box uses two custom routing tables.
 
-Default tables:
+### Table 100
 
-```text
-100 = VPN/client return routing
-101 = breakout WAN routing
-```
+Routes traffic back toward VPN clients.
 
-Default policy priorities:
-
-```text
-9000
-9001
-9002
-```
-
-These priorities are intentionally below Android's normal networking policy rules, which commonly begin around priority `10000`.
-
-Typical rules look similar to:
-
-```text
-9000: from all to 10.8.0.0/24 lookup 100
-9001: from 10.8.0.0/24 lookup 101
-9002: from all iif tun0 lookup 101
-```
-
-Table `100` contains the route back toward VPN clients:
+Example:
 
 ```text
 10.8.0.0/24 dev tun0
 ```
 
-Table `101` contains the breakout route toward the currently active WAN.
+### Table 101
+
+Routes VPN client traffic out through the active Android WAN.
 
 Wi-Fi example:
 
@@ -134,92 +141,94 @@ Mobile-data example:
 default via 10.132.5.142 dev rmnet_data0
 ```
 
-For WAN interfaces without an explicit gateway, Breakout Box can use:
+If Android exposes a direct/point-to-point WAN without an explicit gateway, the module can use:
 
 ```text
 default dev <WAN>
 ```
 
+Typical policy rules with the default configuration look similar to:
+
+```text
+9000: from all to 10.8.0.0/24 lookup 100
+9001: from 10.8.0.0/24 lookup 101
+9002: from all iif tun0 lookup 101
+```
+
+The interface and subnet in the actual rules follow `VPN_INTERFACE` and `VPN_NETWORK`.
+
 ---
 
-# IPv4 Forwarding
+## IPv4 Forwarding
 
-Breakout Box automatically enables IPv4 forwarding:
+The service enables:
 
 ```text
 /proc/sys/net/ipv4/ip_forward = 1
 ```
 
-It also enables per-interface forwarding where available and disables strict reverse-path filtering for the relevant Android interfaces.
+It also enables forwarding on available IPv4 interfaces and sets `rp_filter` to `0` where supported.
 
-This is required for traffic arriving through `tun0` to leave through the Android device's Wi-Fi or cellular interface.
+This is necessary for packets arriving through the VPN interface to leave through Wi-Fi or mobile data.
 
 ---
 
-# Firewall and NAT
+## Firewall and NAT
 
-Breakout Box uses dedicated iptables chains rather than continuously modifying large Android system chains directly.
-
-## Filter chain
+Breakout Box owns two dedicated iptables chains:
 
 ```text
 BB_FORWARD
-```
-
-## NAT chain
-
-```text
 BB_NAT
 ```
 
-The module hooks them into:
+They are attached to:
 
 ```text
-FORWARD
-POSTROUTING
+filter/FORWARD
+nat/POSTROUTING
 ```
 
-Typical forwarding behavior:
+The forwarding behavior is conceptually:
 
 ```text
-tun0 -> WAN
+VPN -> WAN
     ACCEPT
 
-WAN -> tun0
+WAN -> VPN
     ACCEPT RELATED,ESTABLISHED
 ```
 
-Traffic from the configured VPN subnet is masqueraded through the active WAN:
+Traffic from the configured VPN network is masqueraded through the active WAN:
 
 ```text
-10.8.0.0/24 -> WAN -> MASQUERADE
+VPN_NETWORK -> WAN -> MASQUERADE
 ```
 
-This allows VPN clients to use the Android device's current Internet connection.
+Using dedicated chains avoids repeatedly scanning and modifying many Android system rules.
 
 ---
 
-# Self-Healing Routing
+## Self-Healing and Health Checks
 
-Android networking can recreate routing tables, firewall rules, or interfaces when:
+Android can recreate interfaces, routing tables, and firewall state when connectivity changes. Examples include:
 
-* Wi-Fi reconnects
-* Mobile data reconnects
-* Airplane mode changes
-* OpenVPN reconnects
-* Android `netd` changes firewall state
-* The active WAN changes
-* Network interfaces are recreated
+- Wi-Fi reconnects.
+- Mobile-data reconnects.
+- Wi-Fi to mobile-data switching.
+- Mobile-data to Wi-Fi switching.
+- VPN reconnects.
+- VPN interface recreation.
+- Android `netd` firewall changes.
+- Airplane-mode transitions.
 
-Breakout Box monitors these conditions automatically.
-
-Default network-state check:
+The default state-check interval is:
 
 ```text
 3 seconds
 ```
 
-Default health check:
+The default full health-check interval is:
 
 ```text
 15 seconds
@@ -227,141 +236,70 @@ Default health check:
 
 The health checker verifies:
 
-* IPv4 forwarding is enabled
-* VPN interface exists
-* VPN IPv4 address exists
-* WAN interface exists
-* Policy rules exist
-* Table `100` contains the VPN route
-* Table `101` contains the WAN route
-* `BB_FORWARD` exists
-* `BB_NAT` exists
-* Firewall hooks exist
-* NAT masquerading rule exists
+- IPv4 forwarding is enabled.
+- The configured VPN interface exists.
+- The VPN interface has an IPv4 address.
+- The detected WAN interface exists.
+- Policy rules exist.
+- VPN return routing exists in table `100`.
+- WAN default routing exists in table `101`.
+- `BB_FORWARD` is hooked into `FORWARD`.
+- `BB_NAT` is hooked into `POSTROUTING`.
+- Required forwarding rules exist.
+- The MASQUERADE rule exists.
 
-If something disappears, Breakout Box attempts to repair it automatically.
+If a check fails, Breakout Box attempts to rebuild the routing/firewall state.
 
 ---
 
-# Service Supervisor
+## Service Supervisor
 
-The routing worker runs under a supervisor.
+The routing worker runs under a supervisor loop.
 
-If repeated repairs fail, the worker exits and the supervisor automatically restarts it.
-
-Default values:
+Default settings:
 
 ```text
-Maximum repair failures: 3
-Restart delay:           3 seconds
+MAX_REPAIR_FAILURES=3
+SERVICE_RESTART_DELAY_SECONDS=3
 ```
 
-This prevents a temporary Android networking failure from permanently stopping the module.
+After repeated repair failures, the worker exits and the supervisor starts it again after the configured delay.
+
+This prevents a temporary Android networking failure from permanently stopping breakout routing.
 
 ---
 
-# VPN Reconnection Handling
+## Persistent Configuration
 
-If `tun0` disappears, Breakout Box waits for the VPN to return.
-
-Stale policy routes are removed so they cannot interfere with normal Android connectivity.
-
-When `tun0` becomes available again, Breakout Box automatically detects it and rebuilds the breakout routing configuration.
-
-No reboot should normally be required after an OpenVPN reconnect.
-
----
-
-# Wi-Fi and Mobile Data Switching
-
-Breakout Box automatically detects WAN changes.
-
-For example:
-
-```text
-wlan0
-    ↓
-rmnet_data0
-    ↓
-wlan0
-```
-
-When the WAN interface, gateway, or VPN state changes, the routing and firewall configuration is rebuilt automatically.
-
----
-
-# ADB over TCP
-
-Breakout Box can optionally enable classic ADB-over-TCP.
-
-Default:
-
-```text
-Enabled
-Port 5555
-```
-
-Configuration:
-
-```sh
-ENABLE_ADB_TCP=true
-ADB_TCP_PORT="5555"
-```
-
-The module configures:
-
-```text
-persist.adb.tcp.port
-service.adb.tcp.port
-```
-
-and restarts `adbd` when required.
-
-To disable this feature:
-
-```sh
-ENABLE_ADB_TCP=false
-```
-
----
-
-# Persistent Configuration
-
-The module uses a persistent configuration outside the Magisk module directory.
-
-Default configuration shipped with the module:
+Packaged defaults are stored in:
 
 ```text
 /data/adb/modules/breakout-box/default-config.conf
 ```
 
-Persistent device configuration:
+The persistent per-device configuration is:
 
 ```text
 /data/adb/breakout-box/config.conf
 ```
 
-During the first installation, `default-config.conf` is copied to:
+On first installation, `customize.sh` creates the persistent configuration from the packaged defaults. Existing persistent configuration is preserved during module upgrades.
+
+Configuration precedence is:
 
 ```text
+service/upgrader built-in defaults
+        ↓
+default-config.conf
+        ↓
 /data/adb/breakout-box/config.conf
 ```
 
-During future module upgrades, an existing `config.conf` is preserved.
+The persistent config wins.
 
-This means customized settings survive module updates.
-
----
-
-# Configuration
-
-Example configuration:
+### Default configuration
 
 ```sh
-###############################################################################
-# Breakout Box configuration
-###############################################################################
-
 VPN_INTERFACE="tun0"
 VPN_NETWORK="10.8.0.0/24"
 
@@ -374,7 +312,6 @@ VPN_IIF_PRIORITY="9002"
 
 CHECK_INTERVAL_SECONDS="3"
 HEALTH_CHECK_INTERVAL_SECONDS="15"
-
 SERVICE_RESTART_DELAY_SECONDS="3"
 MAX_REPAIR_FAILURES="3"
 
@@ -386,17 +323,13 @@ NAT_CHAIN="BB_NAT"
 
 LOG_TAG="breakout-box"
 LOG_LEVEL="info"
-
 MAX_LOG_SIZE=1048576
 MAX_LOG_FILES=3
 
 AUTO_UPDATE=false
-
-UPDATE_CHECK_INTERVAL_SECONDS="86400"
-UPDATE_INITIAL_DELAY_SECONDS="120"
-
+UPDATE_CHECK_INTERVAL_SECONDS=86400
+UPDATE_INITIAL_DELAY_SECONDS=120
 UPDATE_JSON_URL="https://raw.githubusercontent.com/AyzinA/breakout-box/master/update.json"
-
 UPDATE_REQUIRE_SHA256=true
 UPDATE_INSTALL_ONLY_ON_WIFI=false
 UPDATE_KEEP_DOWNLOADED_ZIP=false
@@ -405,85 +338,45 @@ UPGRADER_MAX_LOG_SIZE=1048576
 UPGRADER_MAX_LOG_FILES=3
 ```
 
-After installation, edit:
+---
 
-```text
-/data/adb/breakout-box/config.conf
+## ADB over TCP
+
+ADB-over-TCP support is configurable:
+
+```sh
+ENABLE_ADB_TCP=true
+ADB_TCP_PORT="5555"
 ```
 
-instead of modifying the module's `default-config.conf`.
+When enabled, the service configures Android's persistent and active ADB TCP port and restarts `adbd` when required.
+
+To disable this behavior:
+
+```sh
+ENABLE_ADB_TCP=false
+```
 
 ---
 
-# Logging
+## Logging
 
-Breakout Box writes events to:
+### Main service log
+
+The service writes to:
 
 ```text
 /data/adb/breakout-box/breakout-box.log
 ```
 
-View the latest log entries:
-
-```sh
-tail -n 50 /data/adb/breakout-box/breakout-box.log
-```
-
-Follow the log live:
-
-```sh
-tail -f /data/adb/breakout-box/breakout-box.log
-```
-
-The module also writes events to Android logcat using the `breakout-box` tag.
-
-Example:
-
-```sh
-logcat -s breakout-box
-```
-
----
-
-# Log Levels
-
-Breakout Box uses the following log levels:
-
-```text
-info
-status
-warn
-error
-```
-
-Examples:
-
-```text
-[info] Breakout Box service started
-
-[status] Rules applied: VPN=tun0 WAN=rmnet_data0 GW=10.132.5.142 TUN=10.8.0.254/24
-
-[warn] VPN unavailable; stale policy routes removed
-
-[warn] Health check failed; repairing routing and firewall state
-
-[error] Rule repair failed (1/3)
-```
-
----
-
-# Log Rotation
-
-Log rotation prevents the persistent log from growing indefinitely.
-
-Default configuration:
+Default rotation settings:
 
 ```sh
 MAX_LOG_SIZE=1048576
 MAX_LOG_FILES=3
 ```
 
-This means:
+Rotated files are:
 
 ```text
 breakout-box.log
@@ -492,91 +385,180 @@ breakout-box.log.2
 breakout-box.log.3
 ```
 
-With the default 1 MiB limit, total log usage is approximately 4 MiB at maximum.
+The Android logcat tag is:
+
+```text
+breakout-box
+```
+
+### Upgrader log
+
+The upgrader writes independently to:
+
+```text
+/data/adb/breakout-box/upgrader.log
+```
+
+Default rotation settings:
+
+```sh
+UPGRADER_MAX_LOG_SIZE=1048576
+UPGRADER_MAX_LOG_FILES=3
+```
+
+Rotated files are:
+
+```text
+upgrader.log
+upgrader.log.1
+upgrader.log.2
+upgrader.log.3
+```
+
+The Android logcat tag is:
+
+```text
+breakout-box-upgrader
+```
+
+### Watch both logcat streams
+
+```sh
+adb logcat -s breakout-box:I breakout-box-upgrader:I
+```
+
+For timestamped output:
+
+```sh
+adb logcat -v time -s breakout-box:I breakout-box-upgrader:I
+```
+
+To save the combined output while viewing it:
+
+```sh
+adb logcat -v time -s breakout-box:I breakout-box-upgrader:I | tee breakout-box-logcat.txt
+```
 
 ---
 
-# Status File
+## Runtime Status Files
 
-The latest important routing state is stored in:
+Main routing status:
 
 ```text
 /data/adb/breakout-box/status
 ```
 
-Check it with:
-
-```sh
-cat /data/adb/breakout-box/status
-```
-
-Example healthy status:
+Upgrader status:
 
 ```text
-Rules applied: VPN=tun0 WAN=rmnet_data0 GW=10.132.5.142 TUN=10.8.0.254/24
+/data/adb/breakout-box/upgrader.status
 ```
 
-Possible warning:
+Upgrader PID:
 
 ```text
-VPN unavailable; stale policy routes removed
+/data/adb/breakout-box/upgrader.pid
 ```
 
-Possible error:
+Upgrade working directory:
 
 ```text
-Rule repair failed (1/3)
+/data/adb/breakout-box/upgrade/
 ```
 
 ---
 
-# Automatic Upgrader
+## Secure HTTPS Upgrader
 
-Breakout Box includes:
+`upgrader.sh` is designed to be reusable across Magisk modules. It reads the module's identity and version from `module.prop` rather than hardcoding `breakout-box` into its update logic.
 
-```text
-upgrader.sh
+The upgrader is not tied to GitHub. The manifest and module ZIP may be hosted on any HTTPS server that the device can access.
+
+The configured manifest URL is:
+
+```sh
+UPDATE_JSON_URL="https://raw.githubusercontent.com/AyzinA/breakout-box/master/update.json"
 ```
 
-The upgrader can check a remote `update.json` file and verify a newer module package before installation.
+This URL is only the default hosting location for this repository.
 
-Automatic updates are disabled by default:
+### Automatic upgrades
+
+Automatic upgrades are disabled by default:
 
 ```sh
 AUTO_UPDATE=false
 ```
 
-This is intentional so an update cannot unexpectedly modify a device carrying active network traffic.
+Enable them in the persistent config with:
+
+```sh
+AUTO_UPDATE=true
+```
+
+Default schedule:
+
+```sh
+UPDATE_INITIAL_DELAY_SECONDS=120
+UPDATE_CHECK_INTERVAL_SECONDS=86400
+```
+
+The automatic loop will not run more frequently than once per hour even if a lower interval is configured.
+
+### Manual upgrader commands
+
+Check once:
+
+```sh
+su -c /data/adb/modules/breakout-box/upgrader.sh check
+```
+
+Display status:
+
+```sh
+su -c /data/adb/modules/breakout-box/upgrader.sh status
+```
+
+Run the continuous loop manually:
+
+```sh
+su -c /data/adb/modules/breakout-box/upgrader.sh loop
+```
+
+Normally the service starts the loop automatically when `AUTO_UPDATE=true`.
 
 ---
 
-# Update Configuration
+## Multi-Module `update.json`
+
+The preferred manifest format allows one HTTPS JSON file to contain update information for multiple modules.
 
 Example:
 
-```sh
-AUTO_UPDATE=false
-
-UPDATE_CHECK_INTERVAL_SECONDS="86400"
-
-UPDATE_INITIAL_DELAY_SECONDS="120"
-
-UPDATE_JSON_URL="https://raw.githubusercontent.com/AyzinA/breakout-box/master/update.json"
-
-UPDATE_REQUIRE_SHA256=true
-
-UPDATE_INSTALL_ONLY_ON_WIFI=false
-
-UPDATE_KEEP_DOWNLOADED_ZIP=false
+```json
+{
+  "schemaVersion": 2,
+  "modules": {
+    "breakout-box": {
+      "version": "1.0.2",
+      "versionCode": 102,
+      "zipUrl": "https://example.com/modules/breakout-box-v1.0.2.zip",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "changelog": "https://example.com/modules/CHANGELOG.md"
+    },
+    "another-module": {
+      "version": "2.4.0",
+      "versionCode": 240,
+      "zipUrl": "https://example.com/modules/another-module-v2.4.0.zip",
+      "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "changelog": "https://example.com/modules/another-module-changelog.md"
+    }
+  }
+}
 ```
 
----
-
-# update.json
-
-The upgrader supports a shared `update.json` containing multiple Magisk modules.
-
-Each module is stored under its exact `module.prop` ID. Breakout Box reads:
+The upgrader reads its local `module.prop`:
 
 ```properties
 id=breakout-box
@@ -588,44 +570,13 @@ and selects only:
 modules.breakout-box
 ```
 
-All other module entries are ignored.
+All unrelated entries are ignored.
 
-Example multi-module manifest:
+`schemaVersion` identifies the manifest layout. The current upgrader primarily selects the module entry by structure/module ID and also keeps compatibility with the legacy single-module format.
 
-```json
-{
-  "schemaVersion": 2,
-  "modules": {
-    "breakout-box": {
-      "version": "1.0.2",
-      "versionCode": 102,
-      "zipUrl": "https://github.com/AyzinA/breakout-box/raw/master/releases/download/v1.0.2/breakout-box-v1.0.2.zip",
-      "sha256": "SHA256_OF_BREAKOUT_BOX_ZIP",
-      "changelog": "https://raw.githubusercontent.com/AyzinA/breakout-box/master/CHANGELOG.md"
-    },
-    "android-exporter": {
-      "version": "1.0.1",
-      "versionCode": 101,
-      "zipUrl": "https://github.com/AyzinA/android-exporter/releases/download/v1.0.1/android-exporter-v1.0.1.zip",
-      "sha256": "SHA256_OF_ANDROID_EXPORTER_ZIP",
-      "changelog": "https://raw.githubusercontent.com/AyzinA/android-exporter/master/CHANGELOG.md"
-    },
-    "auto-unlock": {
-      "version": "1.0.1",
-      "versionCode": 101,
-      "zipUrl": "https://github.com/AyzinA/auto-unlock/releases/download/v1.0.1/auto-unlock-v1.0.1.zip",
-      "sha256": "SHA256_OF_AUTO_UNLOCK_ZIP",
-      "changelog": "https://raw.githubusercontent.com/AyzinA/auto-unlock/master/CHANGELOG.md"
-    }
-  }
-}
-```
+### Legacy single-module manifest
 
-The same `upgrader.sh` can therefore be shared by all modules. Each installed module determines its own ID from `module.prop` and only considers the matching manifest object.
-
-The downloaded ZIP is still validated separately. Its root `module.prop` must contain the same module ID and the expected `versionCode`, so a manifest mistake cannot silently install another module.
-
-For compatibility, `upgrader.sh` also accepts the previous single-module format:
+The upgrader also accepts the older format:
 
 ```json
 {
@@ -633,217 +584,155 @@ For compatibility, `upgrader.sh` also accepts the previous single-module format:
   "version": "1.0.2",
   "versionCode": 102,
   "zipUrl": "https://example.com/breakout-box-v1.0.2.zip",
-  "sha256": "SHA256_OF_THE_RELEASE_ZIP",
+  "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "changelog": "https://example.com/CHANGELOG.md"
 }
 ```
 
-The URLs must be normal HTTPS URLs. Do not use Markdown links or escaped protocols such as `https\://`.
+---
+
+## Upgrade Security and Validation
+
+Before installing a newer module, the upgrader performs several checks.
+
+### HTTPS only
+
+The manifest URL and ZIP URL must use:
+
+```text
+https://
+```
+
+Plain HTTP URLs are rejected.
+
+### Version comparison
+
+The remote `versionCode` must be numerically greater than the installed `versionCode`.
+
+For this release:
+
+```text
+installed/current: 102
+```
+
+A manifest with `versionCode <= 102` is considered up to date.
+
+### SHA-256
+
+With:
+
+```sh
+UPDATE_REQUIRE_SHA256=true
+```
+
+the downloaded ZIP must match the manifest's SHA-256 value.
+
+### ZIP module validation
+
+Before installation, the upgrader extracts the ZIP's root `module.prop` and verifies:
+
+```text
+id == local module ID
+versionCode == manifest versionCode
+```
+
+This prevents a manifest entry from accidentally installing a ZIP for another module or another version.
+
+### Installation
+
+Verified updates are installed using Magisk:
+
+```sh
+magisk --install-module <zip>
+```
+
+A reboot is required after a successfully installed upgrade.
 
 ---
 
-# Manual Update Check
+## Repository Layout
 
-Run:
+Current source repository layout:
 
-```sh
-/data/adb/modules/breakout-box/upgrader.sh check
+```text
+breakout-box/
+├── CHANGELOG.md
+├── README.md
+├── update.json
+├── update.json.example
+├── breakout-box-v1.0.1.zip
+├── breakout-box-v1.0.2.zip
+├── docs/
+│   └── v1.0.1 vs v1.0.2.md
+└── src/
+    ├── customize.sh
+    ├── default-config.conf
+    ├── module.prop
+    ├── service.sh
+    ├── uninstall.sh
+    └── upgrader.sh
 ```
 
-Check upgrader status:
+The installable module ZIP has the Magisk files at its root:
 
-```sh
-/data/adb/modules/breakout-box/upgrader.sh status
+```text
+module.prop
+customize.sh
+default-config.conf
+service.sh
+uninstall.sh
+upgrader.sh
 ```
 
 ---
 
-# Automatic Update Loop
+## Installation
 
-When:
+1. Build or download the `breakout-box-v1.0.2.zip` Magisk module.
+2. Install it using the Magisk app or another supported Magisk module installation method.
+3. Reboot the phone.
+4. Confirm the persistent configuration exists:
 
 ```sh
-AUTO_UPDATE=true
+su -c ls -l /data/adb/breakout-box/config.conf
 ```
 
-Breakout Box starts the upgrader loop automatically.
+5. Verify service status and routing.
 
-The upgrader runs separately from the routing worker so update failures do not interrupt the breakout routing service.
-
-The default polling interval is:
-
-```text
-86400 seconds
-```
-
-which equals one day.
+Existing `/data/adb/breakout-box/config.conf` is preserved during upgrades.
 
 ---
 
-# Update Verification
+## Basic Diagnostics
 
-Before installation, the upgrader can verify:
-
-* HTTPS download source
-* Manifest metadata
-* Newer `versionCode`
-* SHA-256 checksum
-* ZIP validity
-* Internal `module.prop`
-* Module ID
-* Downloaded module version
-
-The module ID inside the downloaded package must match:
-
-```text
-breakout-box
-```
-
----
-
-# Upgrader Logging and Log Rotation
-
-The upgrader writes its own log independently from the routing service:
-
-```text
-/data/adb/breakout-box/upgrader.log
-```
-
-Rotated files are:
-
-```text
-upgrader.log.1
-upgrader.log.2
-upgrader.log.3
-```
-
-Default limits:
-
-```sh
-UPGRADER_MAX_LOG_SIZE=1048576
-UPGRADER_MAX_LOG_FILES=3
-```
-
-View recent upgrader activity:
-
-```sh
-tail -n 50 /data/adb/breakout-box/upgrader.log
-```
-
-The Android logcat tag is:
-
-```text
-breakout-box-upgrader
-```
-
-To watch both the routing service and upgrader in one stream:
+### Watch service and upgrader logs
 
 ```sh
 adb logcat -s breakout-box:I breakout-box-upgrader:I
 ```
 
----
-
-# SHA-256
-
-For release builds, calculate the ZIP checksum before publishing `update.json`.
-
-Linux:
+### Show main status
 
 ```sh
-sha256sum breakout-box-v1.0.2.zip
+adb shell su -c 'cat /data/adb/breakout-box/status'
 ```
 
-Android with a compatible utility:
+### Show recent service log
 
 ```sh
-sha256sum breakout-box-v1.0.2.zip
+adb shell su -c 'tail -n 100 /data/adb/breakout-box/breakout-box.log'
 ```
 
-Place the resulting checksum in:
-
-```json
-"sha256": "..."
-```
-
----
-
-# Module Files
-
-Typical module structure:
-
-```text
-breakout-box/
-├── module.prop
-├── customize.sh
-├── service.sh
-├── upgrader.sh
-├── uninstall.sh
-├── default-config.conf
-├── README.md
-└── CHANGELOG.md
-```
-
-Runtime state is stored separately:
-
-```text
-/data/adb/breakout-box/
-├── config.conf
-├── status
-├── breakout-box.log
-├── breakout-box.log.1
-├── breakout-box.log.2
-├── breakout-box.log.3
-├── service.lock/
-├── upgrader.log
-├── upgrader.log.1
-├── upgrader.status
-├── upgrader.pid
-└── upgrade/
-```
-
-Not every runtime file will necessarily exist at all times.
-
----
-
-# Installation
-
-Install the module ZIP through Magisk.
-
-Example release:
-
-```text
-breakout-box-v1.0.2.zip
-```
-
-After installation:
-
-1. Reboot Android.
-2. Start or allow OpenVPN to connect.
-3. Confirm `tun0` exists.
-4. Check Breakout Box status.
-5. Verify policy routing and firewall rules.
-
----
-
-# Basic Verification
-
-Check status:
+### Show recent upgrader log
 
 ```sh
-cat /data/adb/breakout-box/status
+adb shell su -c 'tail -n 100 /data/adb/breakout-box/upgrader.log'
 ```
 
-Check logs:
+### Check IP forwarding
 
 ```sh
-tail -n 50 /data/adb/breakout-box/breakout-box.log
-```
-
-Check IPv4 forwarding:
-
-```sh
-cat /proc/sys/net/ipv4/ip_forward
+adb shell su -c 'cat /proc/sys/net/ipv4/ip_forward'
 ```
 
 Expected:
@@ -852,571 +741,316 @@ Expected:
 1
 ```
 
----
+### Check configured VPN interface
 
-# Check VPN Interface
+For default OpenVPN:
 
 ```sh
-ip -4 addr show tun0
+adb shell su -c 'ip -4 addr show tun0'
 ```
 
-Example:
+For WireGuard configured as `wg0`:
+
+```sh
+adb shell su -c 'ip -4 addr show wg0'
+```
+
+### Check active WAN
+
+```sh
+adb shell su -c 'ip route get 8.8.8.8'
+```
+
+### Check policy rules
+
+```sh
+adb shell su -c 'ip rule show'
+```
+
+### Check routing tables
+
+```sh
+adb shell su -c 'ip route show table 100'
+adb shell su -c 'ip route show table 101'
+```
+
+### Check firewall rules
+
+```sh
+adb shell su -c 'iptables -L BB_FORWARD -n -v --line-numbers'
+adb shell su -c 'iptables -t nat -L BB_NAT -n -v --line-numbers'
+```
+
+### Check upgrader status
+
+```sh
+adb shell su -c '/data/adb/modules/breakout-box/upgrader.sh status'
+```
+
+---
+
+## Troubleshooting
+
+### `VPN unavailable; stale policy routes removed`
+
+Confirm that the configured VPN interface exists and has an IPv4 address:
+
+```sh
+adb shell su -c 'grep -E "^(VPN_INTERFACE|VPN_NETWORK)=" /data/adb/breakout-box/config.conf'
+adb shell su -c 'ip -4 addr show tun0'
+```
+
+Replace `tun0` with the configured interface if necessary.
+
+If using WireGuard, ensure the config contains the correct interface, for example:
+
+```sh
+VPN_INTERFACE="wg0"
+```
+
+and check:
+
+```sh
+adb shell su -c 'ip -4 addr show wg0'
+```
+
+### Health check repeatedly repairs the rules
+
+Inspect all runtime state:
+
+```sh
+adb shell su -c '
+  echo "=== FORWARDING ==="
+  cat /proc/sys/net/ipv4/ip_forward
+  echo "=== RULES ==="
+  ip rule show
+  echo "=== TABLE 100 ==="
+  ip route show table 100
+  echo "=== TABLE 101 ==="
+  ip route show table 101
+  echo "=== FORWARD ==="
+  iptables -L BB_FORWARD -n -v --line-numbers
+  echo "=== NAT ==="
+  iptables -t nat -L BB_NAT -n -v --line-numbers
+'
+```
+
+A repeated repair usually means Android or another root/networking component is modifying one of the expected rules.
+
+### No traffic reaches the Internet
+
+Check:
+
+```sh
+adb shell su -c 'cat /proc/sys/net/ipv4/ip_forward'
+adb shell su -c 'ip route get 8.8.8.8'
+adb shell su -c 'ip rule show'
+adb shell su -c 'ip route show table 100'
+adb shell su -c 'ip route show table 101'
+adb shell su -c 'iptables -L BB_FORWARD -n -v'
+adb shell su -c 'iptables -t nat -L BB_NAT -n -v'
+```
+
+Also verify that `VPN_NETWORK` is the subnet used by the clients being forwarded, not merely the Android device's own VPN address.
+
+### Upgrader says `No update manifest entry found`
+
+Check the local module ID:
+
+```sh
+adb shell su -c 'grep "^id=" /data/adb/modules/breakout-box/module.prop'
+```
+
+Expected:
 
 ```text
-31: tun0: <POINTOPOINT,UP,LOWER_UP> mtu 1500
-    inet 10.8.0.254/24 scope global tun0
+id=breakout-box
 ```
 
----
+Then inspect the downloaded/remote manifest and ensure it contains the exact matching key:
 
-# Check Current WAN
+```json
+"modules": {
+  "breakout-box": {
+```
+
+Also verify the configured URL:
 
 ```sh
-ip route get 8.8.8.8
+adb shell su -c 'grep "^UPDATE_JSON_URL=" /data/adb/breakout-box/config.conf'
 ```
 
-Wi-Fi example:
+The value must be a plain HTTPS URL, not Markdown link syntax.
+
+Correct:
+
+```sh
+UPDATE_JSON_URL="https://example.com/update.json"
+```
+
+Incorrect:
 
 ```text
-8.8.8.8 via 10.0.1.1 dev wlan0 src 10.0.1.9
+[https://example.com/update.json](https://example.com/update.json)
 ```
 
-Mobile example:
+### `Segmentation fault` during manifest parsing
 
-```text
-8.8.8.8 via 10.132.5.142 dev rmnet_data0 src 10.132.5.141
-```
+The upgrader prefers Magisk/KernelSU BusyBox `awk` where available because vendor Android/Toybox `awk` implementations can be unreliable on some ROMs.
 
----
-
-# Check Policy Rules
+Check BusyBox availability:
 
 ```sh
-ip rule
+adb shell su -c 'ls -l /data/adb/magisk/busybox 2>/dev/null'
 ```
 
-Look for priorities:
-
-```text
-9000
-9001
-9002
-```
-
----
-
-# Check Table 100
+Then inspect:
 
 ```sh
-ip route show table 100
-```
-
-Expected example:
-
-```text
-10.8.0.0/24 dev tun0
-```
-
----
-
-# Check Table 101
-
-```sh
-ip route show table 101
-```
-
-Example:
-
-```text
-10.132.5.142 dev rmnet_data0 scope link
-default via 10.132.5.142 dev rmnet_data0
-```
-
----
-
-# Check Firewall
-
-```sh
-iptables -L BB_FORWARD -n -v --line-numbers
-```
-
-Check the parent hook:
-
-```sh
-iptables -L FORWARD -n -v --line-numbers
-```
-
-There should be a jump to:
-
-```text
-BB_FORWARD
-```
-
----
-
-# Check NAT
-
-```sh
-iptables -t nat -L BB_NAT -n -v --line-numbers
-```
-
-Check the parent hook:
-
-```sh
-iptables -t nat -L POSTROUTING -n -v --line-numbers
-```
-
-There should be a jump to:
-
-```text
-BB_NAT
-```
-
-and the module chain should contain a MASQUERADE rule for the VPN network.
-
----
-
-# Full Diagnostic Command
-
-For troubleshooting:
-
-```sh
-echo "=== STATUS ==="
-cat /data/adb/breakout-box/status
-
-echo
-echo "=== LOG ==="
-tail -n 50 /data/adb/breakout-box/breakout-box.log
-
-echo
-echo "=== FORWARDING ==="
-cat /proc/sys/net/ipv4/ip_forward
-
-echo
-echo "=== TUN ==="
-ip -4 addr show tun0
-
-echo
-echo "=== WAN ==="
-ip route get 8.8.8.8
-
-echo
-echo "=== RULES ==="
-ip rule
-
-echo
-echo "=== TABLE 100 ==="
-ip route show table 100
-
-echo
-echo "=== TABLE 101 ==="
-ip route show table 101
-
-echo
-echo "=== FORWARD ==="
-iptables -L BB_FORWARD -n -v --line-numbers
-
-echo
-echo "=== NAT ==="
-iptables -t nat -L BB_NAT -n -v --line-numbers
-```
-
----
-
-# Client Route Test
-
-To test routing for a specific VPN client:
-
-```sh
-ip route get 1.1.1.1 from 10.8.0.2 iif tun0
-```
-
-Replace:
-
-```text
-10.8.0.2
-```
-
-with the actual VPN client's IP address.
-
-The resulting route should use the Android device's real WAN interface rather than sending the traffic back through `tun0`.
-
----
-
-# Restart Breakout Box Manually
-
-For testing:
-
-```sh
-pkill -f '/data/adb/modules/breakout-box/service.sh' 2>/dev/null
-
-rm -rf /data/adb/breakout-box/service.lock
-
-nohup /data/adb/modules/breakout-box/service.sh >/dev/null 2>&1 &
-```
-
-Then check:
-
-```sh
-cat /data/adb/breakout-box/status
+adb logcat -s breakout-box-upgrader:I
 ```
 
 and:
 
 ```sh
-tail -n 50 /data/adb/breakout-box/breakout-box.log
+adb shell su -c 'tail -n 100 /data/adb/breakout-box/upgrader.log'
 ```
 
----
+### Upgrader reports SHA-256 mismatch
 
-# Clear Logs
+Recalculate the exact published ZIP hash and update the manifest before retrying.
 
-To clear current and rotated logs:
-
-```sh
-rm -f /data/adb/breakout-box/breakout-box.log
-rm -f /data/adb/breakout-box/breakout-box.log.*
-
-touch /data/adb/breakout-box/breakout-box.log
-chmod 600 /data/adb/breakout-box/breakout-box.log
-```
-
----
-
-# Configuration Permissions
-
-The persistent directory should normally be:
-
-```text
-700
-```
-
-The persistent configuration should normally be:
-
-```text
-600
-```
-
-Example:
-
-```sh
-chmod 700 /data/adb/breakout-box
-chmod 600 /data/adb/breakout-box/config.conf
-```
-
----
-
-# customize.sh Behavior
-
-During installation, Breakout Box creates:
-
-```text
-/data/adb/breakout-box
-```
-
-If no persistent configuration exists, it copies:
-
-```text
-default-config.conf
-```
-
-to:
-
-```text
-/data/adb/breakout-box/config.conf
-```
-
-If the file already exists, it is preserved.
-
-This allows the Magisk module itself to be upgraded without losing device-specific settings.
-
----
-
-# Uninstallation
-
-Removing the Magisk module removes the installed module directory.
-
-The uninstall script should also clean Breakout Box-owned routing and firewall state where appropriate.
-
-The persistent directory may contain configuration and logs:
-
-```text
-/data/adb/breakout-box
-```
-
-If complete removal of persistent settings is desired after uninstalling the module, it can be removed manually:
-
-```sh
-rm -rf /data/adb/breakout-box
-```
-
-Only do this if the saved configuration and logs are no longer required.
-
----
-
-# Important Notes
-
-Breakout Box is designed for rooted Android devices using Magisk.
-
-The module expects:
-
-```text
-/system/bin/sh
-ip
-iptables
-awk
-grep
-log
-```
-
-to be available in the Android/Magisk environment.
-
-OpenVPN must create the configured VPN interface before breakout routing can become active.
-
-The default interface is:
-
-```text
-tun0
-```
-
-The default VPN network is:
-
-```text
-10.8.0.0/24
-```
-
-Change these in:
-
-```text
-/data/adb/breakout-box/config.conf
-```
-
-if your OpenVPN configuration uses different values.
-
----
-
-# Troubleshooting
-
-## Watch service and upgrader logs together
-
-From a computer connected through ADB:
-
-```sh
-adb logcat -s breakout-box:I breakout-box-upgrader:I
-```
-
-This shows routing/service events and upgrade checks in chronological order.
-
-## Check current Breakout Box status
-
-```sh
-cat /data/adb/breakout-box/status
-```
-
-A healthy example is:
-
-```text
-Rules applied: VPN=tun0 WAN=rmnet_data0 GW=10.133.186.121 TUN=10.8.0.254/24
-```
-
-## Check routing service log
-
-```sh
-tail -n 50 /data/adb/breakout-box/breakout-box.log
-```
-
-## Check upgrader log
-
-```sh
-tail -n 50 /data/adb/breakout-box/upgrader.log
-```
-
-## Check upgrader status
-
-```sh
-/data/adb/modules/breakout-box/upgrader.sh status
-```
-
-## Run an upgrade check manually
-
-```sh
-/data/adb/modules/breakout-box/upgrader.sh check
-```
-
-If the shared manifest does not contain `breakout-box`, the upgrader logs:
-
-```text
-No update manifest entry found for module=breakout-box
-```
-
-## Verify the manifest manually
-
-```sh
-curl -fsSL "https://raw.githubusercontent.com/AyzinA/breakout-box/master/update.json"
-```
-
-Confirm there is an object named exactly:
-
-```json
-"breakout-box": {
-```
-
-The name must match `id=breakout-box` in `module.prop`.
-
-## No routing / no BB_FORWARD / no BB_NAT
-
-Check:
-
-```sh
-cat /proc/sys/net/ipv4/ip_forward
-ip -4 addr show tun0
-ip route get 8.8.8.8
-ip rule
-ip route show table 100
-ip route show table 101
-iptables -L BB_FORWARD -n -v --line-numbers
-iptables -t nat -L BB_NAT -n -v --line-numbers
-```
-
-Expected IPv4 forwarding:
-
-```text
-1
-```
-
-If `tun0` is missing, Breakout Box waits for OpenVPN to recreate it.
-
-## `VPN unavailable; stale policy routes removed`
-
-Confirm the VPN interface and address exist:
-
-```sh
-ip -4 addr show tun0
-```
-
-Then confirm Android has a usable WAN route:
-
-```sh
-ip route get 8.8.8.8
-```
-
-## Health check keeps repairing rules
-
-Inspect the policy tables and chains:
-
-```sh
-ip route show table 100
-ip route show table 101
-iptables -L BB_FORWARD -n -v
-iptables -t nat -L BB_NAT -n -v
-```
-
-Android `netd`, another firewall application, or a VPN reconnect may remove rules. Breakout Box will attempt to restore them automatically.
-
-## Upgrader returns HTTP 404
-
-Check the active persistent configuration, because it overrides `default-config.conf`:
-
-```sh
-grep '^UPDATE_JSON_URL=' /data/adb/breakout-box/config.conf
-```
-
-Then test that exact URL with:
-
-```sh
-curl -fsSL "$(sed -n 's/^UPDATE_JSON_URL="\(.*\)"/\1/p' /data/adb/breakout-box/config.conf)"
-```
-
-## SHA-256 mismatch
-
-Recalculate the published module ZIP checksum:
+On Linux:
 
 ```sh
 sha256sum breakout-box-v1.0.2.zip
 ```
 
-Then update the matching `breakout-box` entry in `update.json`.
+The manifest value must match the exact file being downloaded by `zipUrl`.
 
-## Stale upgrader PID
+### Upgrader reports a ZIP module-ID mismatch
+
+Inspect the ZIP's root `module.prop`:
+
+```sh
+unzip -p breakout-box-v1.0.2.zip module.prop
+```
+
+It must contain:
+
+```properties
+id=breakout-box
+```
+
+### Upgrader reports a `versionCode` mismatch
+
+The `versionCode` inside the ZIP's `module.prop` must exactly match the value in the selected manifest entry.
+
+For v1.0.2:
+
+```properties
+versionCode=102
+```
+
+### Automatic upgrades do not start
+
+Confirm:
+
+```sh
+adb shell su -c 'grep "^AUTO_UPDATE=" /data/adb/breakout-box/config.conf'
+```
+
+It must be:
+
+```sh
+AUTO_UPDATE=true
+```
+
+Then check:
+
+```sh
+adb shell su -c '/data/adb/modules/breakout-box/upgrader.sh status'
+```
+
+and logcat:
+
+```sh
+adb logcat -s breakout-box:I breakout-box-upgrader:I
+```
+
+### Stale upgrader PID
 
 Check:
 
 ```sh
-cat /data/adb/breakout-box/upgrader.pid
+adb shell su -c 'cat /data/adb/breakout-box/upgrader.pid 2>/dev/null'
 ```
 
-The `status` command reports whether the PID belongs to a running upgrader loop. A stale PID is removed automatically when the service starts a new loop.
+and verify whether that PID still exists. The service removes stale PID files before launching a new automatic loop.
+
+### Persistent config contains old values after upgrading
+
+This is expected. The module deliberately preserves:
+
+```text
+/data/adb/breakout-box/config.conf
+```
+
+Compare it with:
+
+```text
+/data/adb/modules/breakout-box/default-config.conf
+```
+
+and manually add/change new settings you want to use.
 
 ---
 
-# v1.0.2 Highlights
+## Uninstall / Reset
 
-Version 1.0.2 adds major reliability improvements over the initial release.
-
-## Added
-
-* Persistent configuration
-* Dedicated `BB_FORWARD` firewall chain
-* Dedicated `BB_NAT` NAT chain
-* Policy-routing health checks
-* Automatic repair
-* Worker supervisor
-* Log file support
-* Log levels
-* Log rotation
-* Status reporting
-* Universal upgrader
-* SHA-256 update verification
-* Optional Wi-Fi-only update checks
-
-## Improved
-
-* Android/Toybox compatibility
-* Wi-Fi gateway routing
-* Mobile-data routing
-* VPN reconnect handling
-* WAN switching
-* ADB-over-TCP handling
-* Android policy-rule compatibility
-* Boot handling
-* Service recovery
-
-## Changed
-
-Network detection interval:
+Removing the Magisk module removes the module itself, while persistent runtime/configuration data may remain under:
 
 ```text
-10 seconds -> 3 seconds
+/data/adb/breakout-box/
 ```
 
-Policy priorities:
+For a complete manual reset after uninstalling:
 
-```text
-old:
-9999
-10000
-10001
-
-new:
-9000
-9001
-9002
+```sh
+su -c 'rm -rf /data/adb/breakout-box'
 ```
 
-The new priorities avoid collision with Android networking rules commonly beginning at priority `10000`.
+Do this only if you intentionally want to remove the saved configuration, logs, status, and upgrader state.
 
 ---
 
-# Version Information
+## Version 1.0.2 Highlights
 
-```text
-Module:       Breakout Box
-Version:      1.0.2
-Version Code: 102
-Module ID:    breakout-box
-```
+Compared with v1.0.1, v1.0.2 adds:
 
-`module.prop`:
+- Persistent configuration.
+- Faster state polling.
+- Full routing/firewall health checks.
+- Self-healing repair logic.
+- Service supervision.
+- Dedicated iptables chains.
+- Android-aware policy-routing priorities.
+- Improved gateway handling.
+- Configurable ADB-over-TCP.
+- Main service log rotation.
+- Runtime status reporting.
+- VPN-interface-generic routing logic.
+- Secure reusable `upgrader.sh`.
+- Multi-module manifest selection.
+- Independent upgrader log rotation.
+- HTTPS-only downloads.
+- Optional SHA-256 verification.
+- Module-ID and `versionCode` ZIP validation.
+- Optional Wi-Fi-only automatic upgrades.
+
+---
+
+## Module Metadata
 
 ```properties
 id=breakout-box
@@ -1424,5 +1058,5 @@ name=Breakout Box
 version=1.0.2
 versionCode=102
 author=NONAME
-description=Adds breakout-box routing and NAT rules at boot
+description=Self-healing VPN breakout routing/NAT with secure HTTPS upgrader
 ```

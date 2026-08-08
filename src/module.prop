@@ -3,4 +3,4 @@ name=Breakout Box
 version=1.0.2
 versionCode=102
 author=NONAME
-description=Self-healing OpenVPN breakout routing/NAT with GitHub upgrader
+description=Self-healing VPN breakout routing/NAT with secure HTTPS upgrader

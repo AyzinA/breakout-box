@@ -32,7 +32,7 @@ CONFIG_FILE="$STATE_DIR/config.conf"
 [ -r "$DEFAULT_CONFIG" ] && . "$DEFAULT_CONFIG"
 [ -r "$CONFIG_FILE" ] && . "$CONFIG_FILE"
 
-# OpenVPN interface and subnet.
+# VPN interface and subnet.
 VPN="${VPN_INTERFACE:-tun0}"
 VPN_NET="${VPN_NETWORK:-10.8.0.0/24}"
 
@@ -63,7 +63,7 @@ NAT_CHAIN="${NAT_CHAIN:-BB_NAT}"
 
 # Logging and runtime state.
 LOG_TAG="${LOG_TAG:-breakout-box}"
-LOG_LEVEL="${LOG_LEVEL:-info}"
+LOG_LEVEL="${LOG_LEVEL:-INFO}"
 MAX_LOG_SIZE="${MAX_LOG_SIZE:-1048576}"
 MAX_LOG_FILES="${MAX_LOG_FILES:-3}"
 LOG_FILE="$STATE_DIR/breakout-box.log"
@@ -82,16 +82,16 @@ LOG_BIN="log"
 # Last successfully applied network state.
 LAST_WAN=""
 LAST_GW=""
-LAST_TUN_INDEX=""
-LAST_TUN_ADDR=""
+LAST_VPN_INDEX=""
+LAST_VPN_ADDR=""
 LAST_HEALTH_TIME="0"
 REPAIR_FAILURES="0"
 
 # Current state populated by detect_network_state().
 CURRENT_WAN=""
 CURRENT_GW=""
-CURRENT_TUN_INDEX=""
-CURRENT_TUN_ADDR=""
+CURRENT_VPN_INDEX=""
+CURRENT_VPN_ADDR=""
 
 ###############################################################################
 # Utility functions
@@ -149,7 +149,7 @@ log_msg() {
 
   # Keep last important status
   case "$LEVEL" in
-    status|warn|error)
+    STATUS|WARN|ERROR)
       echo "$MESSAGE" > "$STATUS_FILE" 2>/dev/null
       ;;
   esac
@@ -164,7 +164,7 @@ bool_true() {
 start_upgrade_loop() {
   bool_true "$AUTO_UPDATE" || return 0
   UPGRADER="$MODDIR/upgrader.sh"
-  [ -x "$UPGRADER" ] || { log_msg warn "upgrader.sh is missing or not executable"; return 1; }
+  [ -x "$UPGRADER" ] || { log_msg WARN "upgrader.sh is missing or not executable"; return 1; }
 
   MODULE_ID="$(sed -n 's/^id=//p' "$MODDIR/module.prop" 2>/dev/null | head -n 1 | tr -d '\r')"
   UPGRADER_STATE_DIR="${MODULE_STATE_DIR:-/data/adb/$MODULE_ID}"
@@ -173,12 +173,12 @@ start_upgrade_loop() {
   if [ -r "$UPGRADER_PID_FILE" ]; then
     UPDATE_PID="$(cat "$UPGRADER_PID_FILE" 2>/dev/null)"
     case "$UPDATE_PID" in ''|*[!0-9]*) UPDATE_PID="" ;; esac
-    [ -n "$UPDATE_PID" ] && kill -0 "$UPDATE_PID" 2>/dev/null && { log_msg info "Automatic upgrade loop already running (PID $UPDATE_PID)."; return 0; }
+    [ -n "$UPDATE_PID" ] && kill -0 "$UPDATE_PID" 2>/dev/null && { log_msg INFO "Automatic upgrade loop already running (PID $UPDATE_PID)."; return 0; }
     rm -f "$UPGRADER_PID_FILE"
   fi
 
   MODDIR="$MODDIR" nohup "$UPGRADER" loop >/dev/null 2>&1 &
-  log_msg info "Automatic upgrade loop started."
+  log_msg INFO "Automatic upgrade loop started."
 }
 
 now_seconds() {
@@ -213,7 +213,7 @@ acquire_lock() {
 
   OLD_PID="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
   if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-    log_msg warn "Another service.sh instance is already running with PID $OLD_PID"
+    log_msg WARN "Another service.sh instance is already running with PID $OLD_PID"
     return 1
   fi
 
@@ -234,22 +234,22 @@ release_lock() {
 detect_network_state() {
   CURRENT_WAN=""
   CURRENT_GW=""
-  CURRENT_TUN_INDEX=""
-  CURRENT_TUN_ADDR=""
+  CURRENT_VPN_INDEX=""
+  CURRENT_VPN_ADDR=""
 
   [ -d "/sys/class/net/$VPN" ] || return 1
 
-  CURRENT_TUN_INDEX="$($IP_BIN -o link show "$VPN" 2>/dev/null | "$AWK_BIN" -F': ' 'NR==1 {print $1}')"
-  CURRENT_TUN_ADDR="$($IP_BIN -4 -o addr show dev "$VPN" 2>/dev/null | "$AWK_BIN" 'NR==1 {print $4}')"
+  CURRENT_VPN_INDEX="$($IP_BIN -o link show "$VPN" 2>/dev/null | "$AWK_BIN" -F': ' 'NR==1 {print $1}')"
+  CURRENT_VPN_ADDR="$($IP_BIN -4 -o addr show dev "$VPN" 2>/dev/null | "$AWK_BIN" 'NR==1 {print $4}')"
 
-  [ -n "$CURRENT_TUN_INDEX" ] || return 1
-  [ -n "$CURRENT_TUN_ADDR" ] || return 1
+  [ -n "$CURRENT_VPN_INDEX" ] || return 1
+  [ -n "$CURRENT_VPN_ADDR" ] || return 1
 
-  ROUTE_STATE="$($IP_BIN route get 8.8.8.8 2>/dev/null | "$AWK_BIN" '
+  ROUTE_STATE="$($IP_BIN route get 8.8.8.8 2>/dev/null | "$AWK_BIN" -v vpn="$VPN" '
     NR==1 {
       wan="-"; gw="-"
       for (i=1; i<=NF; i++) {
-        if ($i=="dev" && (i+1)<=NF && $(i+1) !~ /^tun/) wan=$(i+1)
+        if ($i=="dev" && (i+1)<=NF && $(i+1) != vpn) wan=$(i+1)
         if ($i=="via" && (i+1)<=NF) gw=$(i+1)
       }
       print wan, gw
@@ -275,23 +275,23 @@ detect_network_state() {
 network_state_changed() {
   [ "$CURRENT_WAN" != "$LAST_WAN" ] && return 0
   [ "$CURRENT_GW" != "$LAST_GW" ] && return 0
-  [ "$CURRENT_TUN_INDEX" != "$LAST_TUN_INDEX" ] && return 0
-  [ "$CURRENT_TUN_ADDR" != "$LAST_TUN_ADDR" ] && return 0
+  [ "$CURRENT_VPN_INDEX" != "$LAST_VPN_INDEX" ] && return 0
+  [ "$CURRENT_VPN_ADDR" != "$LAST_VPN_ADDR" ] && return 0
   return 1
 }
 
 save_network_state() {
   LAST_WAN="$CURRENT_WAN"
   LAST_GW="$CURRENT_GW"
-  LAST_TUN_INDEX="$CURRENT_TUN_INDEX"
-  LAST_TUN_ADDR="$CURRENT_TUN_ADDR"
+  LAST_VPN_INDEX="$CURRENT_VPN_INDEX"
+  LAST_VPN_ADDR="$CURRENT_VPN_ADDR"
 }
 
 reset_network_state() {
   LAST_WAN=""
   LAST_GW=""
-  LAST_TUN_INDEX=""
-  LAST_TUN_ADDR=""
+  LAST_VPN_INDEX=""
+  LAST_VPN_ADDR=""
   LAST_HEALTH_TIME="0"
 }
 
@@ -326,7 +326,7 @@ enable_adb_tcp() {
       sleep 1
       start adbd 2>/dev/null
     }
-    log_msg info  "ADB TCP enabled on port $ADB_PORT"
+    log_msg INFO  "ADB TCP enabled on port $ADB_PORT"
   fi
 }
 
@@ -431,7 +431,7 @@ apply_rules() {
   apply_policy_rules "$WAN" "$GW" || return 1
   apply_iptables_rules "$WAN" || return 1
 
-  log_msg status "Rules applied: VPN=$VPN WAN=$WAN GW=${GW:-direct} TUN=$CURRENT_TUN_ADDR"
+  log_msg STATUS "Rules applied: VPN=$VPN WAN=$WAN GW=${GW:-direct} VPN_ADDR=$CURRENT_VPN_ADDR"
   return 0
 }
 
@@ -457,7 +457,7 @@ iptables_rules_healthy() {
 health_check() {
   [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" = "1" ] || return 1
   [ -d "/sys/class/net/$VPN" ] || return 1
-  [ -n "$CURRENT_TUN_ADDR" ] || return 1
+  [ -n "$CURRENT_VPN_ADDR" ] || return 1
   [ -d "/sys/class/net/$CURRENT_WAN" ] || return 1
 
   policy_rules_healthy || return 1
@@ -485,7 +485,7 @@ repair_or_restart() {
   fi
 
   REPAIR_FAILURES=$((REPAIR_FAILURES + 1))
-  log_msg error "Rule repair failed ($REPAIR_FAILURES/$MAX_REPAIR_FAILURES)"
+  log_msg ERROR "Rule repair failed ($REPAIR_FAILURES/$MAX_REPAIR_FAILURES)"
 
   [ "$REPAIR_FAILURES" -lt "$MAX_REPAIR_FAILURES" ] && return 0
   return 1
@@ -503,10 +503,10 @@ service_worker() {
     if ! detect_network_state; then
       # The VPN may simply be disconnected. Remove stale policy routes so they
       # cannot affect the Android device, then wait for the tunnel to return.
-      if [ -n "$LAST_TUN_INDEX" ] || [ -n "$LAST_WAN" ]; then
+      if [ -n "$LAST_VPN_INDEX" ] || [ -n "$LAST_WAN" ]; then
         clean_policy_rules
         reset_network_state
-        log_msg warn "VPN unavailable; stale policy routes removed"
+        log_msg WARN "VPN unavailable; stale policy routes removed"
       fi
       sleep "$CHECK_INTERVAL"
       continue
@@ -515,7 +515,7 @@ service_worker() {
     if network_state_changed; then
       repair_or_restart || return 1
     elif health_check_due && ! health_check; then
-      log_msg warn "Health check failed; repairing routing and firewall state"
+      log_msg WARN "Health check failed; repairing routing and firewall state"
       repair_or_restart || return 1
     fi
 
@@ -527,7 +527,7 @@ supervisor_loop() {
   while true; do
     service_worker
     EXIT_CODE="$?"
-    log_msg warn "Worker exited with code $EXIT_CODE; restarting in ${RESTART_DELAY}s"
+    log_msg WARN "Worker exited with code $EXIT_CODE; restarting in ${RESTART_DELAY}s"
     clean_policy_rules
     reset_network_state
     sleep "$RESTART_DELAY"
@@ -542,7 +542,7 @@ trap release_lock EXIT INT TERM
 
 command_requirements_ok || {
   mkdir -p "$STATE_DIR" 2>/dev/null
-  log_msg error "Missing required command: ip, iptables, awk, grep, or log"
+  log_msg ERROR "Missing required command: ip, iptables, awk, grep, or log"
   exit 1
 }
 
@@ -553,5 +553,5 @@ wait_for_android_boot
 start_upgrade_loop
 
 enable_adb_tcp
-log_msg info "Breakout Box service started"
+log_msg INFO "Breakout Box service started"
 supervisor_loop
